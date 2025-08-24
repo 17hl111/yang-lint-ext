@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "yang-oas-generator-tool"
+version = "0.1.0"
+description = "Generate Swagger and OpenAPI specifications"
+authors = ["Hesham Elabd <hesham.abbas@queensu.ca>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+yangson = "^1.5.10"
+pyang = "^2.6.1"
+pydantic = "^2.11.7"
+watchdog = "^6.0.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

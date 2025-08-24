@@ -1,0 +1,142 @@
+module ipNetToMediaTable{
+namespace "http://telus.com/yang/arp";
+prefix arp;
+
+import ietf-inet-types {
+    prefix inet;
+  }
+  
+import ietf-yang-types {
+    prefix yang;
+  }
+import ietf-yang-smiv2 {
+    prefix smiv2;
+  }
+
+import ietf-privileges {
+    prefix pr;
+}
+
+import ietf-endpoint {
+    prefix ep;
+}
+
+
+container ipNetToMediaTable {
+        ep:endpoint "/ip_net_to_media_table";
+        pr:privileges "fetch put post";
+        status deprecated;
+        description
+          "The IPv4 Address Translation table used for mapping from
+           IPv4 addresses to physical addresses.
+           This table has been deprecated, as a new IP version-neutral
+           table has been added.  It is loosely replaced by the
+           ipNetToPhysicalTable.";
+        smiv2:oid "1.3.6.1.2.1.4.22";
+        list ipNetToMediaEntry {
+          ep:endpoint "/media_entry/{ip_net_to_media_entry_ip_net_to_media_if_index}/{ip_net_to_media_entry_ip_net_to_media_net_address}";
+          pr:privileges "fetch delete";
+          key "ipNetToMediaIfIndex ipNetToMediaNetAddress";
+          status deprecated;
+          description
+            "Each entry contains one IpAddress to `physical' address 
+             equivalence.";
+          smiv2:oid "1.3.6.1.2.1.4.22.1";
+          leaf ipNetToMediaIfIndex {
+            type int32 {
+                range "1..2147483647";
+            }
+            status deprecated;
+            description
+                "The interface on which this entry's equivalence is
+                effective. The interface identified by a particular value
+                of this index is the same interface as identified by the
+                same value of the IF-MIB's ifIndex.
+                This object predates the rule limiting index objects to a
+                max access value of 'not-accessible' and so continues to use
+                a value of 'read-create'.";
+            smiv2:max-access read-write;
+            smiv2:oid "1.3.6.1.2.1.4.22.1.1";
+            // NCS dropped explicit config true
+          }
+          leaf ipNetToMediaPhysAddress {
+            ep:endpoint "/media_entry/{ip_net_to_media_entry_ip_net_to_media_if_index}/{ip_net_to_media_entry_ip_net_to_media_net_address}/physical_address";
+            pr:privileges "update patch";
+            type yang:phys-address {
+                length "0..65535";
+            }
+            status deprecated;
+            description
+                "The media-dependent `physical' address. This object should
+                return 0 when this entry is in the 'incomplete' state.
+                As the entries in this table are typically not persistent
+                when this object is written, the entity should not save the
+                change to non-volatile storage. Note: a stronger
+                requirement is not used because this object was previously
+                defined.";
+            smiv2:max-access read-write;
+            smiv2:oid "1.3.6.1.2.1.4.22.1.2";
+            // NCS dropped explicit config true
+          }
+          leaf ipNetToMediaActualAddress {
+                type int32 { 
+                range "0..2147483647";
+              }       
+          }
+          leaf ipNetToMediaNetAddress {
+            type inet:ipv4-address;
+            status deprecated;
+            description
+              "The IpAddress corresponding to the media-dependent
+               `physical' address.
+               This object predates the rule limiting index objects to a
+               max access value of 'not-accessible' and so continues to use
+               a value of 'read-create'.";
+            smiv2:max-access read-write;
+            smiv2:oid "1.3.6.1.2.1.4.22.1.3";
+            // NCS dropped explicit config true
+          }
+
+          leaf ipNetToMediaType {
+            type enumeration {
+              enum "default" {
+                value 1;
+              }
+              enum "invalid" {
+                value 2;
+              }
+              enum "dynamic" {
+                value 3;
+              }
+              enum "static" {
+                value 4;
+              }
+            }
+            status deprecated;
+            description
+              "The type of mapping.
+               Setting this object to the value invalid(2) has the effect
+               of invalidating the corresponding entry in the
+               ipNetToMediaTable.  That is, it effectively dis-associates
+               the interface identified with said entry from the mapping
+               identified with said entry.  It is an implementation-
+               specific matter as to whether the agent removes an
+               invalidated entry from the table.  Accordingly, management
+               stations must be prepared to receive tabular information
+               from agents that corresponds to entries not currently in
+               use.  Proper interpretation of such entries requires
+               examination of the relevant ipNetToMediaType object.
+               As the entries in this table are typically not persistent
+               when this object is written the entity should not save the
+               change to non-volatile storage.  Note: a stronger
+               requirement is not used because this object was previously
+               defined.";
+            smiv2:max-access read-write;
+            smiv2:oid "1.3.6.1.2.1.4.22.1.4";
+            // NCS dropped explicit config true
+          }
+          // NCS dropped explicit config true
+        }
+        // NCS dropped explicit config true
+      }
+}

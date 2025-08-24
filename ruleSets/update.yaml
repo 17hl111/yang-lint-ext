@@ -1,0 +1,6 @@
+rules:
+  - id: namespace-immutable
+    description: "The namespace of an existing YANG module MUST NOT change"
+    severity: error
+    scope: module-header
+    when: changed(namespace)

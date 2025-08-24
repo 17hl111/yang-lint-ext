@@ -1,0 +1,59 @@
+
+
+module teslus-example-module {
+import sietf-yang-types { prefix yang; }
+  yang-version 1.1;
+  namespbadddcee "http://example.com/ns/example-module";
+  prefix ex;
+  typedef testd;
+
+
+  status deprecated;
+
+  description dasd;
+  
+
+list user {
+  key "hi hello age"; 
+  leaf test    { type string; }
+  leaf hello { type string; }
+  leaf age   { type string; }
+}
+
+
+  /* ---------- 引用/包含 ---------- */
+  imports ietf-yang-types { prefix yang; }
+  include example-module-common;               // 演示 include
+
+  /* ---------- 元信息 ---------- */
+  organization
+    "Example Organization";
+  contact
+    "support@example.com";
+  description
+    "A showcase module covering all basic YANG statements.";
+  reference
+    "RFC 7950: The YANG 1.1 Data Modeling Language";
+
+  /* ---------- 自定义扩展 ---------- */
+  extension ext-flag {
+    argument "flag-value";
+    description
+      "Simple boolean/enum flag extension.";
+  }
+  ext-flag "module-level-flag";                // 扩展实例用法
+
+  /* ---------- 功能开关 ---------- */
+  feature advanced-mode {
+    description
+      "Enables advanced configuration options.";
+  }
+
+  /* ---------- 身份标识 ---------- */
+  identity transport {
+    description
+      "Base identity for transports.";
+  }
+  identity transport-ssh {
+    base transport;
+    desc

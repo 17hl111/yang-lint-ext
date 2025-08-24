@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  yang-watcher:
+    build: .
+    image: yang-watcher:latest
+    volumes:
+      - .:/workdir:rw
+    environment:
+      WATCH_DIR: /workdir
+      MODULES: /workdir/arp
+      MODEL_FILE: /workdir/arp/ipNetToMediaTable.yang
+      MODEL_FILE_NAME: ipNetToMediaTable.yang
+      OUTPUT: /workdir/output/swagger.json
+      OAS_OUTPUT: /workdir/output/oas3.json
+      ANNOTATION: "true"
+      DEBOUNCE_SEC: "1"
+    # allow container to keep running and watch filesystem
+    tty: true

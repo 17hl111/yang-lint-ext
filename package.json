@@ -1,0 +1,256 @@
+{
+  "name": "yang-lint-ext",
+  "displayName": "YANG Lint",
+  "publisher": "your-name",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.87.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:yang",
+    "onView:yangModelsView",
+    "onCommand:yang.toggleRuleSet",
+    "onCommand:oas.generator",
+    "onCommand:oas.rebuildGeneratorImage",
+    "onCommand:oas.stopContainer",
+    "onCommand:oas.openOutputFolder",
+    "onCommand:oas.switchAnnotation",
+    "onCommand:oas.openWatcherLog",
+    "onCommand:yangModels.searchImport",
+    "onCommand:yangModels.openManifest",
+    "onCommand:yangModels.refresh",
+    "onCommand:yangModels.addLocalSource"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "yang",
+        "aliases": [
+          "YANG"
+        ],
+        "extensions": [
+          ".yang"
+        ]
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "yangModelsView",
+          "name": "YANG Models"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "yang.toggleRuleSet",
+        "title": "YANG: Toggle Rule Set"
+      },
+      {
+        "command": "oas.generator",
+        "title": "OAS Generator: Build & Run Watcher"
+      },
+      {
+        "command": "oas.rebuildGeneratorImage",
+        "title": "rebuild OAS GENERATOR image"
+      },
+      {
+        "command": "oas.stopContainer",
+        "title": "OAS Generator: Stop Container"
+      },
+      {
+        "command": "oas.openOutputFolder",
+        "title": "OAS Generator: Open 'output' Folder"
+      },
+      {
+        "command": "oas.switchAnnotation",
+        "title": "OAS Generator: Switch Annotation"
+      },
+      {
+        "command": "oas.openWatcherLog",
+        "title": "OAS Generator: Open Log file"
+      },
+      {
+        "command": "yangModels.searchImport",
+        "title": "YANG Models: Search & Import"
+      },
+      {
+        "command": "yangModels.openManifest",
+        "title": "YANG Models: Open Manifest (.yang-models.json)"
+      },
+      {
+        "command": "yangModels.refresh",
+        "title": "YANG Models: Refresh Sources & Cache"
+      },
+      {
+        "command": "yangModels.addLocalSource",
+        "title": "YANG Models: Add Local Source"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "when": "view == yangModelsView",
+          "command": "yangModels.searchImport",
+          "group": "navigation@1"
+        },
+        {
+          "when": "view == yangModelsView",
+          "command": "yangModels.openManifest",
+          "group": "navigation@2"
+        },
+        {
+          "when": "view == yangModelsView",
+          "command": "yangModels.refresh",
+          "group": "navigation@3"
+        },
+        {
+          "when": "view == yangModelsView",
+          "command": "yangModels.addLocalSource",
+          "group": "navigation@4"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "yang.toggleRuleSet",
+          "when": "true"
+        },
+        {
+          "command": "oas.generator",
+          "when": "true"
+        },
+        {
+          "command": "oas.rebuildGeneratorImage",
+          "when": "true"
+        },
+        {
+          "command": "oas.stopContainer",
+          "when": "true"
+        },
+        {
+          "command": "oas.openOutputFolder",
+          "when": "true"
+        },
+        {
+          "command": "oas.switchAnnotation",
+          "when": "true"
+        },
+        {
+          "command": "oas.openWatcherLog",
+          "when": "true"
+        },
+        {
+          "command": "yangModels.searchImport",
+          "when": "true"
+        },
+        {
+          "command": "yangModels.openManifest",
+          "when": "true"
+        },
+        {
+          "command": "yangModels.refresh",
+          "when": "true"
+        },
+        {
+          "command": "yangModels.addLocalSource",
+          "when": "true"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "YANG Lint",
+      "properties": {
+        "yangeditor.ruleSet": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ],
+          "default": "create",
+          "description": "Active rule set (create | update)"
+        },
+        "yangeditor.ruleDir": {
+          "type": "string",
+          "default": "ruleSets",
+          "description": "Folder containing YAML rule files & schema"
+        },
+        "yang.oas.imageName": {
+          "type": "string",
+          "default": "yang-watcher:latest",
+          "description": "OAS generator container image name (e.g. repo/name:tag). Leave default if unsure."
+        },
+        "yang.oas.containerName": {
+          "type": "string",
+          "default": "yang-watcher",
+          "description": "OAS generator container name. Change to avoid conflicts across projects."
+        },
+        "yang.models.sources": {
+          "type": "array",
+          "default": [
+            { "type": "catalog", "baseUrl": "https://www.yangcatalog.org", "name": "YANG Catalog" }
+          ],
+          "description": "Configurable model sources: local folders and online catalogs",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["local", "catalog"] },
+              "path": { "type": "string", "description": "For local source: absolute folder path" },
+              "baseUrl": { "type": "string", "description": "For catalog: base URL, e.g. https://www.yangcatalog.org" },
+              "name": { "type": "string", "description": "Display name" }
+            },
+            "required": ["type"]
+          }
+        },
+        "yang.models.defaultImportDir": {
+          "type": "string",
+          "default": "imported",
+          "description": "Default folder (relative to workspace) where imported YANG modules are stored"
+        },
+        "yang.models.cacheTtlHours": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "description": "Cache TTL (hours) for catalog search results"
+        }
+      }
+    }
+  },
+  "extensionPack": [
+    "marko2276.yang"
+  ],
+  "extensionDependencies": [
+    "marko2276.yang"
+  ],
+  "scripts": {
+    "watch": "tsc -w -p ./",
+    "compile": "tsc -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/jexl": "^2.0.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.11.17",
+    "@types/vscode": "^1.87.0",
+    "@vscode/test-electron": "^2.4.3",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "ajv": "^8.12.0",
+    "jexl": "^2.3.0",
+    "js-yaml": "^4.1.0",
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.0",
+    "vscode-languageserver-textdocument": "^1.0.1"
+  },
+  "files": [
+    "out/**",
+    "oas_generator/**",
+    "README.md",
+    "LICENSE"
+  ]
+}

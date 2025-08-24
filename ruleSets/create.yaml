@@ -1,0 +1,104 @@
+rules:
+# ── module-header ───────────────────────────────────────────────
+  - id: namespace-required
+    description: Namespace MUST exist in a new module
+    severity: error
+    scope: module-header
+    when: missing(namespace)
+
+  - id: module-prefix-telus
+    description: Module name MUST start with 'telus-'
+    severity: error
+    scope: module-header
+    when: "!match(moduleName, '^telus-')"
+
+# ── import ──────────────────────────────────────────────────────
+  - id: import-required
+    description: Module MUST import at least one external module
+    severity: error
+    scope: import
+    when: missing(imports)
+
+# ── typedef ─────────────────────────────────────────────────────
+  - id: typedef-name-prefix
+    description: Typedef name MUST start with 'telus-'
+    severity: warning
+    scope: typedef
+    when: "!match(typedef.name, '^telus-')"
+
+# ── status ──────────────────────────────────────────────────────
+  - id: status-deprecated-note
+    description: Deprecated / obsolete status MUST have description note within 3 lines
+    severity: warning
+    scope: status
+    when: >
+      (status.value in ["deprecated","obsolete"]) &&
+      !haswithin(status.afterLines, "description", 3)
+
+# ── list ────────────────────────────────────────────────────────
+  - id: list-key-order
+    description: All key leafs MUST appear first and in the declared order
+    severity: warning
+    scope: list
+    when: keyOrderInvalid(list)
+
+# ---- description presence -----------------------------------
+  - id: desc-anyxml
+    description: anyxml SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: anyxml
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-augment
+    description: augment SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: augment
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-choice
+    description: choice SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: choice
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-container
+    description: container SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: container
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-extension
+    description: extension SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: extension
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-feature
+    description: feature SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: feature
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-list
+    description: list SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: list
+    when: "!haswithin(list.afterLines, 'description', 3)"
+
+  - id: desc-notification
+    description: notification SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: notification
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-rpc
+    description: rpc SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: rpc
+    when: "!haswithin(block.afterLines, 'description', 3)"
+
+  - id: desc-typedef
+    description: typedef SHOULD include a description statement within 3 lines
+    severity: warning
+    scope: typedef
+    when: "!haswithin(typedef.afterLines, 'description', 3)"

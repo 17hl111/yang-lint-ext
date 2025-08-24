@@ -1,0 +1,20 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+	  {
+		"label": "watch",                // ← 与 launch.json 对应
+		"type": "npm",
+		"script": "watch",               // package.json 里定义的 "watch": "tsc -w -p ./"
+		"isBackground": true,
+		"problemMatcher": "$tsc-watch",  // VS Code 自带，识别 "Watching for file changes."
+		"presentation": {
+		  "reveal": "never"
+		},
+		"group": {
+		  "kind": "build",
+		  "isDefault": true
+		}
+	  }
+	]
+  }
+  
