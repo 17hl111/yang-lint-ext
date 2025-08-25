@@ -12,7 +12,6 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onLanguage:yang",
-    "onView:yangModelsView",
     "onCommand:yang.toggleRuleSet",
     "onCommand:oas.generator",
     "onCommand:oas.rebuildGeneratorImage",
@@ -20,10 +19,7 @@
     "onCommand:oas.openOutputFolder",
     "onCommand:oas.switchAnnotation",
     "onCommand:oas.openWatcherLog",
-    "onCommand:yangModels.searchImport",
-    "onCommand:yangModels.openManifest",
-    "onCommand:yangModels.refresh",
-    "onCommand:yangModels.addLocalSource"
+    "onCommand:Open_YANG_import_UI"
   ],
   "contributes": {
     "languages": [
@@ -37,14 +33,6 @@
         ]
       }
     ],
-    "views": {
-      "explorer": [
-        {
-          "id": "yangModelsView",
-          "name": "YANG Models"
-        }
-      ]
-    },
     "commands": [
       {
         "command": "yang.toggleRuleSet",
@@ -75,45 +63,12 @@
         "title": "OAS Generator: Open Log file"
       },
       {
-        "command": "yangModels.searchImport",
-        "title": "YANG Models: Search & Import"
-      },
-      {
-        "command": "yangModels.openManifest",
-        "title": "YANG Models: Open Manifest (.yang-models.json)"
-      },
-      {
-        "command": "yangModels.refresh",
-        "title": "YANG Models: Refresh Sources & Cache"
-      },
-      {
-        "command": "yangModels.addLocalSource",
-        "title": "YANG Models: Add Local Source"
+        "command": "Open_YANG_import_UI",
+        "title": "Open YANG import UI",
+        "category": "YANG"
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "when": "view == yangModelsView",
-          "command": "yangModels.searchImport",
-          "group": "navigation@1"
-        },
-        {
-          "when": "view == yangModelsView",
-          "command": "yangModels.openManifest",
-          "group": "navigation@2"
-        },
-        {
-          "when": "view == yangModelsView",
-          "command": "yangModels.refresh",
-          "group": "navigation@3"
-        },
-        {
-          "when": "view == yangModelsView",
-          "command": "yangModels.addLocalSource",
-          "group": "navigation@4"
-        }
-      ],
       "commandPalette": [
         {
           "command": "yang.toggleRuleSet",
@@ -144,19 +99,7 @@
           "when": "true"
         },
         {
-          "command": "yangModels.searchImport",
-          "when": "true"
-        },
-        {
-          "command": "yangModels.openManifest",
-          "when": "true"
-        },
-        {
-          "command": "yangModels.refresh",
-          "when": "true"
-        },
-        {
-          "command": "yangModels.addLocalSource",
+          "command": "Open_YANG_import_UI",
           "when": "true"
         }
       ]
@@ -193,28 +136,17 @@
           "default": [
             { "type": "catalog", "baseUrl": "https://www.yangcatalog.org", "name": "YANG Catalog" }
           ],
-          "description": "Configurable model sources: local folders and online catalogs",
-          "items": {
-            "type": "object",
-            "properties": {
-              "type": { "type": "string", "enum": ["local", "catalog"] },
-              "path": { "type": "string", "description": "For local source: absolute folder path" },
-              "baseUrl": { "type": "string", "description": "For catalog: base URL, e.g. https://www.yangcatalog.org" },
-              "name": { "type": "string", "description": "Display name" }
-            },
-            "required": ["type"]
-          }
+          "description": "Data sources for importing YANG modules. Two kinds of entries are supported: { type: 'local', path, name? } and { type: 'catalog', baseUrl, name? }"
         },
         "yang.models.defaultImportDir": {
           "type": "string",
           "default": "imported",
-          "description": "Default folder (relative to workspace) where imported YANG modules are stored"
+          "description": "Default folder (under the workspace root) used to store imported modules."
         },
         "yang.models.cacheTtlHours": {
           "type": "number",
           "default": 1,
-          "minimum": 0,
-          "description": "Cache TTL (hours) for catalog search results"
+          "description": "Catalog search cache TTL (hours)."
         }
       }
     }
