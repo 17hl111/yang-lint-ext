@@ -18,7 +18,6 @@ import {
  * constants
  * ------------------------------------------------- */
 const OAS_CHANNEL = vscode.window.createOutputChannel('OAS Generator');
-const MODELS_CHANNEL = vscode.window.createOutputChannel('YANG Models');
 
 // Defaults (overridable via settings)
 const DEFAULT_IMAGE = 'yang-watcher:latest';
@@ -33,9 +32,11 @@ const WS_KEYS = {
   lastAnnotation: 'yang.oas.lastAnnotation', // boolean
 };
 
-// models keys & defaults
+/* ======================= NEW (YANG Import) ======================= */
+const MODELS_CHANNEL = vscode.window.createOutputChannel('YANG Models');
 const MODELS_CACHE_KEY = 'yang.models.cache.v1';
-const DEFAULT_IMPORT_DIR = 'imported'; // << 第一阶段要求：默认导入到工作区下的 "imported"
+const DEFAULT_IMPORT_DIR = 'imported';
+/* ================================================================ */
 
 /* -------------------------------------------------
  * globals
@@ -271,7 +272,7 @@ function loadingHtml(filePath: string) {
       body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
       .top{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--border)}
       .meta{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-      .badge{padding:2px 6px;border-radius:10px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);font-size:12px}
+      .badge{padding:2px 6px;border-radius:10px;background:var(--badge-bg);color:var(--badge-fg);font-size:12px}
       .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
       .dot.up{background:#2ea043} .dot.exited{background:#d22}
       .actions{display:flex;gap:6px}
@@ -798,39 +799,26 @@ async function openWatcherLogCommand(context: vscode.ExtensionContext) {
   await vscode.window.showTextDocument(doc, { preview: true });
 }
 
-/* -------------------------------------------------
- * ========== 第一阶段新增：数据源配置 / 侧边栏 / 搜索导入 / 清单缓存 ==========
- * ------------------------------------------------- */
-
+/* ======================= NEW (YANG Import) ======================= */
+/* ---- Types & config helpers ---- */
 type LocalSource = { type: 'local'; path: string; name?: string };
 type CatalogSource = { type: 'catalog'; baseUrl: string; name?: string };
 type YangSource = LocalSource | CatalogSource;
 
-type ModelsCache = {
-  [key: string]: { ts: number; data: any };
-};
+type ModelsCache = { [key: string]: { ts: number; data: any } };
 
-type CatalogModule = {
-  name: string;
-  revision: string;
-  organization?: string;
-  schema?: string;
-};
+type CatalogModule = { name: string; revision: string; organization?: string; schema?: string; };
 
 type ManifestEntry = {
   name: string;
   revision: string;
   organization?: string;
-  source: { type: 'catalog' | 'local'; ref: string }; // ref = baseUrl or local path
-  destRel: string; // 相对工作区的保存路径
+  source: { type: 'catalog' | 'local'; ref: string };
+  destRel: string;
   sha256?: string;
-  importedAt: string; // ISO
+  importedAt: string;
 };
-
-type ManifestFile = {
-  $schema?: string;
-  items: ManifestEntry[];
-};
+type ManifestFile = { $schema?: string; items: ManifestEntry[] };
 
 function modelsConfig() {
   const cfg = vscode.workspace.getConfiguration('yang.models');
@@ -839,223 +827,121 @@ function modelsConfig() {
   const cacheTtlHours = Number(cfg.get('cacheTtlHours', 1));
   return { sources, defaultImportDir, cacheTtlHours };
 }
-
-function getWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
-  return vscode.workspace.workspaceFolders?.[0];
-}
-
-function manifestFsPath(): string | undefined {
-  const ws = getWorkspaceFolder();
-  if (!ws) return undefined;
-  return path.join(ws.uri.fsPath, '.yang-models.json');
-}
-
+function getWorkspaceFolder(): vscode.WorkspaceFolder | undefined { return vscode.workspace.workspaceFolders?.[0]; }
+function manifestFsPath(): string | undefined { const ws = getWorkspaceFolder(); if (!ws) return undefined; return path.join(ws.uri.fsPath, '.yang-models.json'); }
 async function readManifest(): Promise<ManifestFile> {
-  const f = manifestFsPath();
-  if (!f) return { items: [] };
-  try {
-    const buf = await fs.promises.readFile(f, 'utf8');
-    const j = JSON.parse(buf);
-    if (Array.isArray(j?.items)) return j as ManifestFile;
-  } catch { /* ignore */ }
+  const f = manifestFsPath(); if (!f) return { items: [] };
+  try { const buf = await fs.promises.readFile(f, 'utf8'); const j = JSON.parse(buf); if (Array.isArray(j?.items)) return j as ManifestFile; } catch {}
   return { items: [] };
 }
-
-async function writeManifest(m: ManifestFile): Promise<void> {
-  const f = manifestFsPath();
-  if (!f) return;
-  const body = JSON.stringify({ $schema: undefined, ...m }, null, 2);
-  await fs.promises.writeFile(f, body, 'utf8');
-}
-
-async function ensureDir(p: string) {
-  await fs.promises.mkdir(p, { recursive: true });
-}
-
-function sha256Of(text: string): string {
-  return crypto.createHash('sha256').update(text).digest('hex');
-}
-
-function joinWs(...p: string[]): string {
-  const ws = getWorkspaceFolder();
-  if (!ws) throw new Error('No workspace open');
-  return path.join(ws.uri.fsPath, ...p);
-}
-
-function calcDefaultImportDirAbs(): string {
-  const { defaultImportDir } = modelsConfig();
-  return joinWs(defaultImportDir);
-}
-
-async function chooseImportTargetDir(): Promise<string | undefined> {
-  const def = calcDefaultImportDirAbs();
-  const pick = await vscode.window.showQuickPick(
-    [
-      { label: `Use default: ${def}`, value: def },
-      { label: 'Choose folder…', value: '__choose__' }
-    ],
-    { placeHolder: 'Select import destination directory' }
-  );
-  if (!pick) return undefined;
-  if (pick.value === '__choose__') {
-    const sel = await vscode.window.showOpenDialog({
-      canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
-      openLabel: 'Select folder for imported YANG modules'
-    });
-    return sel?.[0]?.fsPath;
-  }
-  return pick.value;
-}
-
-/* ---------- Catalog 搜索与下载（容错多端点） ---------- */
+async function writeManifest(m: ManifestFile): Promise<void> { const f = manifestFsPath(); if (!f) return; await fs.promises.writeFile(f, JSON.stringify({ $schema: undefined, ...m }, null, 2), 'utf8'); }
+async function ensureDir(p: string) { await fs.promises.mkdir(p, { recursive: true }); }
+function sha256Of(text: string): string { return crypto.createHash('sha256').update(text).digest('hex'); }
+function joinWs(...p: string[]): string { const ws = getWorkspaceFolder(); if (!ws) throw new Error('No workspace open'); return path.join(ws.uri.fsPath, ...p); }
+function calcDefaultImportDirAbs(): string { const { defaultImportDir } = modelsConfig(); return joinWs(defaultImportDir); }
 
 function cacheGet(context: vscode.ExtensionContext, key: string): any | undefined {
   const all = (context.globalState.get(MODELS_CACHE_KEY) as ModelsCache) || {};
   return all[key] && typeof all[key].ts === 'number' ? all[key] : undefined;
 }
-
 async function cacheSet(context: vscode.ExtensionContext, key: string, data: any) {
   const all = (context.globalState.get(MODELS_CACHE_KEY) as ModelsCache) || {};
   all[key] = { ts: Date.now(), data };
   await context.globalState.update(MODELS_CACHE_KEY, all);
 }
-
 function isCacheFresh(entry: { ts: number } | undefined, ttlHours: number): boolean {
-  if (!entry) return false;
-  const ageMs = Date.now() - entry.ts;
-  return ageMs < ttlHours * 3600 * 1000;
+  if (!entry) return false; return (Date.now() - entry.ts) < ttlHours * 3600 * 1000;
 }
 
-// —— 放到 extension.ts 中，替换原来的 catalogSearch() ——
-
-// 统一解析几种返回结构
+/* ---- Catalog 搜索（多端点 fallback） ---- */
 function parseModules(j: any): CatalogModule[] {
-  // 1) 常见结构：{"yang-catalog:modules":{"module":[...]}}
   const list1 = j?.['yang-catalog:modules']?.module;
-  if (Array.isArray(list1)) {
-    return list1.map((m: any) => ({
-      name: m.name, revision: m.revision, organization: m.organization, schema: m.schema
-    }));
-  }
-  // 2) 单个对象
-  if (j && typeof j === 'object' && j.name && j.revision) {
-    return [{ name: j.name, revision: j.revision, organization: j.organization, schema: j.schema }];
-  }
-  // 3) 直接数组
-  if (Array.isArray(j)) {
-    return j.map((m: any) => ({
-      name: m.name, revision: m.revision, organization: m.organization, schema: m.schema
-    }));
-  }
+  if (Array.isArray(list1)) return list1.map((m:any)=>({ name:m.name, revision:m.revision, organization:m.organization, schema:m.schema }));
+  if (j && typeof j==='object' && j.name && j.revision) return [{ name:j.name, revision:j.revision, organization:j.organization, schema:j.schema }];
+  if (Array.isArray(j)) return j.map((m:any)=>({ name:m.name, revision:m.revision, organization:m.organization, schema:m.schema }));
   return [];
 }
+async function safeBody(res: any) { try { return await res.text(); } catch { return ''; } }
 
-async function safeBody(res: any) {
-  try { return await res.text(); } catch { return ''; }
-}
-
-// “多端点容错”搜索：按 field/value 搜索，失败自动换用其它等价端点，最终退到 search-filter
-async function catalogSearch(
-  baseUrl: string,
-  field: string,
-  value: string,
-  latestOnly: boolean,
-  context: vscode.ExtensionContext
-): Promise<CatalogModule[]> {
+async function catalogSearch(baseUrl: string, field: string, value: string, latestOnly: boolean, context: vscode.ExtensionContext): Promise<CatalogModule[]> {
   const { cacheTtlHours } = modelsConfig();
   const key = `${baseUrl}|${field}|${value}|${latestOnly}`;
+  const hit = cacheGet(context, key); if (isCacheFresh(hit, cacheTtlHours)) return hit.data as CatalogModule[];
+
   const bu = baseUrl.replace(/\/+$/,'');
   const lrQ = latestOnly ? 'latest-revision=true' : '';
-  const hit = cacheGet(context, key);
-  if (isCacheFresh(hit, cacheTtlHours)) return hit.data as CatalogModule[];
-
-  // 每次尝试都会把 URL 打到 “YANG Models” Output，便于调试
   const attempts: Array<() => Promise<CatalogModule[]>> = [];
 
-  // A. 路径式（有的部署是 /search/name/<value>）
-  attempts.push(async () => {
-    const url = `${bu}/api/search/${encodeURIComponent(field)}/${encodeURIComponent(value)}${lrQ ? `?${lrQ}` : ''}`;
-    MODELS_CHANNEL.appendLine(`Catalog search A (path): ${url}`);
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' } as any });
+  attempts.push(async ()=>{ // A
+    const url = `${bu}/api/search/${encodeURIComponent(field)}/${encodeURIComponent(value)}${lrQ?`?${lrQ}`:''}`;
+    MODELS_CHANNEL.appendLine(`Catalog search A: ${url}`);
+    const res = await fetch(url, { headers:{'Accept':'application/json'} as any });
     if (!res.ok) throw new Error(`A HTTP ${res.status} ${await safeBody(res)}`);
     return parseModules(await res.json());
   });
-
-  // B. 冒号式（某些老写法）：/api/search/name:ietf-vbng
-  attempts.push(async () => {
-    const url = `${bu}/api/search/${encodeURIComponent(field)}:${encodeURIComponent(value)}${lrQ ? `?${lrQ}` : ''}`;
-    MODELS_CHANNEL.appendLine(`Catalog search B (colon): ${url}`);
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' } as any });
+  attempts.push(async ()=>{ // B
+    const url = `${bu}/api/search/${encodeURIComponent(field)}:${encodeURIComponent(value)}${lrQ?`?${lrQ}`:''}`;
+    MODELS_CHANNEL.appendLine(`Catalog search B: ${url}`);
+    const res = await fetch(url, { headers:{'Accept':'application/json'} as any });
     if (!res.ok) throw new Error(`B HTTP ${res.status} ${await safeBody(res)}`);
     return parseModules(await res.json());
   });
-
-  // C. query 参数式：/api/search/modules?name=<value>（很多部署按这个支持“按名称”）
-  if (field === 'name') {
-    attempts.push(async () => {
-      const url = `${bu}/api/search/modules?name=${encodeURIComponent(value)}${lrQ ? `&${lrQ}` : ''}`;
-      MODELS_CHANNEL.appendLine(`Catalog search C (query): ${url}`);
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' } as any });
+  if (field==='name') {
+    attempts.push(async ()=>{ // C
+      const url = `${bu}/api/search/modules?name=${encodeURIComponent(value)}${lrQ?`&${lrQ}`:''}`;
+      MODELS_CHANNEL.appendLine(`Catalog search C: ${url}`);
+      const res = await fetch(url, { headers:{'Accept':'application/json'} as any });
       if (!res.ok) throw new Error(`C HTTP ${res.status} ${await safeBody(res)}`);
       return parseModules(await res.json());
     });
-
-    // D. 另一种路径前缀：/api/search/module/<value>
-    attempts.push(async () => {
-      const url = `${bu}/api/search/module/${encodeURIComponent(value)}${lrQ ? `?${lrQ}` : ''}`;
-      MODELS_CHANNEL.appendLine(`Catalog search D (module/<name>): ${url}`);
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' } as any });
+    attempts.push(async ()=>{ // D
+      const url = `${bu}/api/search/module/${encodeURIComponent(value)}${lrQ?`?${lrQ}`:''}`;
+      MODELS_CHANNEL.appendLine(`Catalog search D: ${url}`);
+      const res = await fetch(url, { headers:{'Accept':'application/json'} as any });
       if (!res.ok) throw new Error(`D HTTP ${res.status} ${await safeBody(res)}`);
       return parseModules(await res.json());
     });
   }
-
-  // E. 兜底（最稳）：POST /api/search-filter
-  //    统一把条件放 body 里（部分部署只开放了这个接口用于检索）
-  attempts.push(async () => {
-    // 构造一个最小过滤器：按字段精确匹配
-    const body = {
-      'latest-revision': latestOnly,
-      input: { [field]: value }
-    };
+  attempts.push(async ()=>{ // E
+    const body = { 'latest-revision': latestOnly, input: { [field]: value } };
     const url = `${bu}/api/search-filter`;
-    MODELS_CHANNEL.appendLine(`Catalog search E (search-filter): ${url} body=${JSON.stringify(body)}`);
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' } as any,
-      body: JSON.stringify(body)
-    });
+    MODELS_CHANNEL.appendLine(`Catalog search E: ${url} body=${JSON.stringify(body)}`);
+    const res = await fetch(url, { method:'POST', headers:{'Accept':'application/json','Content-Type':'application/json'} as any, body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`E HTTP ${res.status} ${await safeBody(res)}`);
     return parseModules(await res.json());
   });
 
-  // 逐个尝试
   const errors: string[] = [];
   for (const fn of attempts) {
     try {
       const out = await fn();
-      if (out && out.length) {
-        await cacheSet(context, key, out);
-        return out;
-      }
-    } catch (e: any) {
-      errors.push(String(e?.message || e));
-    }
+      if (out && out.length) { await cacheSet(extCtx!, key, out); return out; }
+    } catch (e:any) { errors.push(String(e?.message || e)); }
   }
   throw new Error(`Catalog search failed across fallbacks: ${errors.join(' | ')}`);
 }
 
-
+/* ---- Catalog 下载（/reference + HTML 去壳） ---- */
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&#34;/g, '"')
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
 async function catalogDownload(baseUrl: string, name: string, revision: string): Promise<string> {
   const url = `${baseUrl.replace(/\/+$/,'')}/api/services/reference/${encodeURIComponent(name)}@${encodeURIComponent(revision)}.yang`;
   MODELS_CHANNEL.appendLine(`Catalog download: ${url}`);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-  return await res.text();
+  let text = await res.text();
+  const pre = text.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+  if (pre) text = pre[1];
+  return decodeHtmlEntities(text);
 }
 
-/* ---------- Local 源扫描 ---------- */
-
+/* ---- Local 源扫描 ---- */
 function* walkDirSync(dir: string): Generator<string> {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const e of entries) {
@@ -1064,15 +950,12 @@ function* walkDirSync(dir: string): Generator<string> {
     else if (e.isFile() && /\.yang$/i.test(e.name)) yield p;
   }
 }
-
 function parseYangHead(content: string): { name?: string; revision?: string } {
   const nameMatch = content.match(/^\s*module\s+([A-Za-z0-9\-_\.]+)/m);
-  // 找最近的 revision 语句（简化版）
   const revMatch = content.match(/^\s*revision\s+([0-9]{4}-[0-9]{2}-[0-9]{2})\s*;/m) ||
                    content.match(/^\s*revision\s+"([0-9]{4}-[0-9]{2}-[0-9]{2})"\s*;/m);
   return { name: nameMatch?.[1], revision: revMatch?.[1] };
 }
-
 async function scanLocalSource(sourcePath: string): Promise<Array<CatalogModule & { filePath: string }>> {
   const out: Array<CatalogModule & { filePath: string }> = [];
   try {
@@ -1081,16 +964,12 @@ async function scanLocalSource(sourcePath: string): Promise<Array<CatalogModule 
         const buf = await fs.promises.readFile(p, 'utf8');
         const head = buf.slice(0, 4000);
         const meta = parseYangHead(head);
-        if (meta.name) {
-          out.push({ name: meta.name, revision: meta.revision ?? 'unknown', organization: undefined, schema: undefined, filePath: p });
-        }
-      } catch { /* skip */ }
+        if (meta.name) out.push({ name: meta.name, revision: meta.revision ?? 'unknown', organization: undefined, schema: undefined, filePath: p });
+      } catch {}
     }
-  } catch { /* ignore */ }
+  } catch {}
   return out;
 }
-
-/* ---------- 导入与清单写入 ---------- */
 
 async function materializeTo(destDir: string, fileName: string, content: string): Promise<string> {
   await ensureDir(destDir);
@@ -1098,14 +977,12 @@ async function materializeTo(destDir: string, fileName: string, content: string)
   await fs.promises.writeFile(dest, content, 'utf8');
   return dest;
 }
-
 async function copyFileTo(destDir: string, srcPath: string, fileName: string): Promise<string> {
   await ensureDir(destDir);
   const dest = path.join(destDir, fileName);
   await fs.promises.copyFile(srcPath, dest);
   return dest;
 }
-
 async function upsertManifest(entry: ManifestEntry): Promise<void> {
   const m = await readManifest();
   const key = `${entry.name}@${entry.revision}|${entry.source.type}|${entry.source.ref}`;
@@ -1113,250 +990,403 @@ async function upsertManifest(entry: ManifestEntry): Promise<void> {
   m.items = [...filtered, entry];
   await writeManifest(m);
 }
+async function getManifestSummary(): Promise<{count:number,lastUpdated?:string}> {
+  const f = manifestFsPath(); if (!f) return {count:0};
+  try { const txt = await fs.promises.readFile(f,'utf8'); const j = JSON.parse(txt) as ManifestFile; const st = await fs.promises.stat(f); return { count: (j.items||[]).length, lastUpdated: new Date(st.mtime).toLocaleString() }; } catch { return {count:0}; }
+}
 
-/* ---------- 侧边栏 TreeView ---------- */
+/* ---- Webview UI ---- */
+function importWebviewHtml(): string {
+  return `
+  <!doctype html>
+  <html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <style>
+      :root{--fg:var(--vscode-foreground);--bg:var(--vscode-editor-background);--muted:var(--vscode-descriptionForeground);--border:var(--vscode-editorWidget-border);--accent:var(--vscode-textLink-foreground)}
+      body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
+      h2{margin:14px 0 8px;font-size:14px}
+      .wrap{padding:12px}
+      .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+      .card{border:1px solid var(--border);border-radius:8px;padding:12px}
+      .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+      input[type=text],select{flex:1 1 auto;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg)}
+      button{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg);cursor:pointer}
+      button.primary{border-color:var(--accent)}
+      table{width:100%;border-collapse:collapse;font-family:ui-monospace,Consolas,monospace}
+      th,td{border-bottom:1px solid var(--border);padding:6px 8px;text-align:left;vertical-align:top}
+      .muted{color:var(--muted)}
+      .pill{display:inline-block;padding:2px 6px;border-radius:999px;border:1px solid var(--border);margin-right:4px}
+      .list{max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px}
+      .footer{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+      .small{font-size:12px}
+      .danger{color:#e5534b}
+      .ok{color:#2ea043}
+      .section{margin-top:10px}
+      .kbd{padding:1px 4px;border:1px solid var(--border);border-radius:4px;font-family:ui-monospace,Consolas,monospace}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="grid">
 
-class YangModelsTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+        <div class="card">
+          <h2>Resources</h2>
+          <div class="row">
+            <button id="btnRefresh">Refresh</button>
+            <button id="btnOpenSettings">Open Settings</button>
+          </div>
+          <div class="section">
+            <div class="row"><b>Local sources</b> <button id="btnAddLocal">Add…</button></div>
+            <div id="localList" class="list small muted">Loading…</div>
+          </div>
+          <div class="section">
+            <div class="row"><b>Catalog sources</b> <button id="btnAddCatalog">Add…</button></div>
+            <div id="catalogList" class="list small muted">Loading…</div>
+          </div>
+        </div>
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+        <div class="card">
+          <h2>Destination</h2>
+          <div class="row">
+            <span>Target folder:</span>
+            <span id="dest" class="muted small"></span>
+          </div>
+          <div class="row">
+            <button id="btnUseDefault">Use Default</button>
+            <button id="btnChooseFolder">Choose Folder…</button>
+          </div>
 
-  refresh() { this._onDidChangeTreeData.fire(); }
+          <h2 class="section">Manifest</h2>
+          <div class="row small"><span>Items:</span><b id="mCount">-</b><span class="muted">Last updated:</span><span id="mTime" class="muted">-</span></div>
+          <div class="row">
+            <button id="btnOpenManifest">Open Manifest</button>
+            <button id="btnClearCache">Clear Catalog Cache</button>
+          </div>
+        </div>
 
-  getTreeItem(el: vscode.TreeItem): vscode.TreeItem { return el; }
+      </div>
 
-  async getChildren(el?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
-    if (!el) {
-      const roots: vscode.TreeItem[] = [];
-      const sources = new vscode.TreeItem('Sources', vscode.TreeItemCollapsibleState.Expanded);
-      sources.contextValue = 'root-sources';
-      sources.iconPath = new vscode.ThemeIcon('plug');
-      roots.push(sources);
+      <div class="card section">
+        <h2>Search</h2>
+        <div class="grid">
+          <div>
+            <div class="row"><b>Local search</b></div>
+            <div class="row">
+              <input id="localTerm" type="text" placeholder="Module name contains…"/>
+              <button id="btnSearchLocal" class="primary">Search Local</button>
+            </div>
+          </div>
+          <div>
+            <div class="row"><b>Catalog search</b></div>
+            <div class="row">
+              <select id="catField">
+                <option value="name">name</option>
+                <option value="organization">organization</option>
+                <option value="prefix">prefix</option>
+              </select>
+              <input id="catTerm" type="text" placeholder="Search term"/>
+              <button id="btnSearchCatalog" class="primary">Search Catalog</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      const search = new vscode.TreeItem('Search', vscode.TreeItemCollapsibleState.Expanded);
-      search.contextValue = 'root-search';
-      search.iconPath = new vscode.ThemeIcon('search');
-      roots.push(search);
+      <div class="card section">
+        <h2>Results</h2>
+        <div class="row small muted" id="resultsHint">No results yet.</div>
+        <div style="overflow:auto">
+          <table id="resultsTable" style="display:none">
+            <thead><tr><th>Name</th><th>Revision</th><th>Org/From</th><th>Where</th><th></th></tr></thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+        </div>
+      </div>
 
-      const imported = new vscode.TreeItem('Imported', vscode.TreeItemCollapsibleState.Expanded);
-      imported.contextValue = 'root-imported';
-      imported.iconPath = new vscode.ThemeIcon('archive');
-      roots.push(imported);
+      <div class="footer small">
+        <div>Tip: manage sources in <span class="kbd">Settings</span> – search <span class="kbd">yang.models.sources</span></div>
+        <div id="toast" class="muted"></div>
+      </div>
+    </div>
 
-      return roots;
-    }
+    <script>
+      const vscode = acquireVsCodeApi();
+      const $ = (id)=>document.getElementById(id);
+      const toast=(s,cls='')=>{ const t=$('toast'); t.textContent=s; t.className = cls; setTimeout(()=>{ if($('toast').textContent===s) $('toast').textContent=''; }, 4000); };
 
-    if (el.contextValue === 'root-sources') {
-      const { sources } = modelsConfig();
-      const items: vscode.TreeItem[] = [];
-      for (const s of sources as YangSource[]) {
-        if (s.type === 'local') {
-          const it = new vscode.TreeItem(`Local: ${s.name ?? s.path}`, vscode.TreeItemCollapsibleState.None);
-          it.description = s.path;
-          it.tooltip = s.path;
-          it.contextValue = 'source-local';
-          it.iconPath = new vscode.ThemeIcon('folder-library');
-          items.push(it);
-        } else if (s.type === 'catalog') {
-          const it = new vscode.TreeItem(`Catalog: ${s.name ?? 'YANG Catalog'}`, vscode.TreeItemCollapsibleState.None);
-          it.description = (s as CatalogSource).baseUrl;
-          it.tooltip = (s as CatalogSource).baseUrl;
-          it.contextValue = 'source-catalog';
-          it.iconPath = new vscode.ThemeIcon('globe');
-          items.push(it);
-        }
-      }
-      if (!items.length) {
-        const hint = new vscode.TreeItem('No sources configured (open Settings → yang.models.sources)', vscode.TreeItemCollapsibleState.None);
-        hint.iconPath = new vscode.ThemeIcon('gear');
-        items.push(hint);
-      }
-      return items;
-    }
-
-    if (el.contextValue === 'root-search') {
-      const cat = new vscode.TreeItem('Catalog: Search & Import…', vscode.TreeItemCollapsibleState.None);
-      cat.command = { command: 'yangModels.searchImport', title: 'Search Catalog', arguments: ['catalog'] };
-      cat.iconPath = new vscode.ThemeIcon('cloud-download');
-
-      const loc = new vscode.TreeItem('Local: Search & Import…', vscode.TreeItemCollapsibleState.None);
-      loc.command = { command: 'yangModels.searchImport', title: 'Search Local', arguments: ['local'] };
-      loc.iconPath = new vscode.ThemeIcon('file-code');
-
-      return [cat, loc];
-    }
-
-    if (el.contextValue === 'root-imported') {
-      const m = await readManifest();
-      if (!m.items.length) {
-        const none = new vscode.TreeItem('No items yet. Use "Search & Import…" above.', vscode.TreeItemCollapsibleState.None);
-        none.iconPath = new vscode.ThemeIcon('info');
-        const open = new vscode.TreeItem('Open .yang-models.json', vscode.TreeItemCollapsibleState.None);
-        open.command = { command: 'yangModels.openManifest', title: 'Open manifest' };
-        open.iconPath = new vscode.ThemeIcon('json');
-        return [none, open];
-      }
-      const items = m.items
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map(it => {
-          const label = `${it.name}@${it.revision}`;
-          const node = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
-          node.description = `${it.source.type} • ${it.organization ?? 'unknown'} • ${it.destRel}`;
-          node.tooltip = `Source: ${it.source.type} (${it.source.ref})\nPath: ${it.destRel}\nImported: ${it.importedAt}`;
-          node.iconPath = new vscode.ThemeIcon(it.source.type === 'catalog' ? 'cloud' : 'file');
-          node.resourceUri = vscode.Uri.file(joinWs(it.destRel));
-          node.command = { command: 'revealInExplorer', title: 'Reveal', arguments: [node.resourceUri] };
-          return node;
+      function renderSources(data){
+        const {locals,catalogs} = data;
+        const localList = $('localList'); const catList = $('catalogList');
+        localList.innerHTML = ''; catList.innerHTML = '';
+        if(!locals.length) localList.innerHTML = '<span class="muted">No local sources</span>';
+        locals.forEach((s,i)=>{
+          const div = document.createElement('div'); div.className='row';
+          div.innerHTML = '<span class="pill">local</span><b>'+ (s.name||'(unnamed)') +'</b><span class="muted">'+s.path+'</span>';
+          const del=document.createElement('button'); del.textContent='Delete'; del.className='danger small'; del.onclick=()=>vscode.postMessage({type:'deleteSource', index:i});
+          div.appendChild(del); localList.appendChild(div);
         });
-      const open = new vscode.TreeItem('Open .yang-models.json', vscode.TreeItemCollapsibleState.None);
-      open.command = { command: 'yangModels.openManifest', title: 'Open manifest' };
-      open.iconPath = new vscode.ThemeIcon('json');
-      return [...items, open];
-    }
+        if(!catalogs.length) catList.innerHTML = '<span class="muted">No catalog sources</span>';
+        catalogs.forEach((s,i)=>{
+          const div = document.createElement('div'); div.className='row';
+          div.innerHTML = '<span class="pill">catalog</span><b>'+ (s.name||'(unnamed)') +'</b><span class="muted">'+s.baseUrl+'</span>';
+          const del=document.createElement('button'); del.textContent='Delete'; del.className='danger small'; del.onclick=()=>vscode.postMessage({type:'deleteSource', index: locals.length + i});
+          div.appendChild(del); catList.appendChild(div);
+        });
+      }
+      function renderDest(s){ $('dest').textContent = s; }
+      function renderManifest(m){ $('mCount').textContent = m.count; $('mTime').textContent = m.lastUpdated || '-'; }
+      function renderResults(rows){
+        const tb=$('resultsBody'); tb.innerHTML='';
+        const table=$('resultsTable'), hint=$('resultsHint');
+        if(!rows.length){ table.style.display='none'; hint.style.display='block'; hint.textContent='No results.'; return; }
+        table.style.display='table'; hint.style.display='none';
+        rows.forEach((r,idx)=>{
+          const tr=document.createElement('tr');
+          tr.innerHTML='<td>'+r.name+'</td><td>'+r.revision+'</td><td>'+(r.organization||r.from||'')+'</td><td class="small muted">'+(r.where||'')+'</td>';
+          const td=document.createElement('td'); const btn=document.createElement('button'); btn.textContent='Import';
+          btn.onclick=()=>{ if(r.kind==='local'){ vscode.postMessage({type:'importLocal', item:r}); } else { vscode.postMessage({type:'importCatalog', item:r}); } };
+          td.appendChild(btn); tr.appendChild(td); tb.appendChild(tr);
+        });
+      }
 
-    return [];
-  }
+      // Events
+      $('btnRefresh').onclick=()=>vscode.postMessage({type:'refreshSources'});
+      $('btnOpenSettings').onclick=()=>vscode.postMessage({type:'openSettings'});
+
+      $('btnAddLocal').onclick=()=>vscode.postMessage({type:'addLocalSource'});
+      $('btnAddCatalog').onclick=()=>{ const baseUrl=prompt('Catalog baseUrl (e.g. https://www.yangcatalog.org)'); if(!baseUrl) return; const name=prompt('Optional display name'); vscode.postMessage({type:'addCatalogSource', baseUrl, name}); };
+
+      $('btnUseDefault').onclick=()=>vscode.postMessage({type:'setDestDefault'});
+      $('btnChooseFolder').onclick=()=>vscode.postMessage({type:'chooseDest'});
+
+      $('btnOpenManifest').onclick=()=>vscode.postMessage({type:'openManifest'});
+      $('btnClearCache').onclick=()=>vscode.postMessage({type:'clearCache'});
+
+      $('btnSearchLocal').onclick=()=>{ const term=$('localTerm').value.trim(); vscode.postMessage({type:'searchLocal', term}); };
+      $('btnSearchCatalog').onclick=()=>{ const term=$('catTerm').value.trim(); const field=$('catField').value; vscode.postMessage({type:'searchCatalog', field, term}); };
+
+      // Init
+      vscode.postMessage({type:'init'});
+
+      // Messages from extension
+      window.addEventListener('message', (e)=>{
+        const m=e.data;
+        if(m.type==='initData'){ renderSources(m.sources); renderDest(m.destDir); renderManifest(m.manifest); }
+        else if(m.type==='sourcesUpdated'){ renderSources(m.sources); toast('Sources updated','ok'); }
+        else if(m.type==='destChanged'){ renderDest(m.destDir); toast('Destination changed','ok'); }
+        else if(m.type==='manifestInfo'){ renderManifest(m.manifest); }
+        else if(m.type==='toast'){ toast(m.message, m.level||''); }
+        else if(m.type==='localResults'){ renderResults(m.rows); }
+        else if(m.type==='catalogResults'){ renderResults(m.rows); }
+        else if(m.type==='imported'){ toast('Imported: '+m.file,'ok'); }
+      });
+    </script>
+  </body>
+  </html>`;
 }
 
-/* ---------- 搜索 & 导入 Command 实现 ---------- */
+async function openImportUI(context: vscode.ExtensionContext) {
+  const panel = vscode.window.createWebviewPanel(
+    'yangImportUI', 'YANG Import', vscode.ViewColumn.Beside,
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
+  panel.webview.html = importWebviewHtml();
 
-async function cmdSearchImport(kind: 'catalog' | 'local', context: vscode.ExtensionContext) {
-  const ws = getWorkspaceFolder();
-  if (!ws) { vscode.window.showErrorMessage('Please open a workspace first.'); return; }
+  // 当前 UI 会话中的“导入目标目录”，默认使用 settings 指定的默认目录
+  let destDirCurrent = calcDefaultImportDirAbs();
 
-  const importDir = await chooseImportTargetDir();
-  if (!importDir) return;
-  await ensureDir(importDir);
-
-  if (kind === 'catalog') {
-    const cfgSources = (modelsConfig().sources as YangSource[]).filter(s => s.type === 'catalog') as CatalogSource[];
-    const baseUrl = (cfgSources[0]?.baseUrl) || 'https://www.yangcatalog.org';
-    const field = await vscode.window.showQuickPick(['name', 'organization', 'prefix'], { placeHolder: 'Search field in catalog' });
-    if (!field) return;
-    const term = await vscode.window.showInputBox({ prompt: `Catalog: search ${field}` });
-    if (!term) return;
-
-    const latestOnly = true; // 与网页体验对齐
-    let mods: CatalogModule[] = [];
-    try {
-      mods = await catalogSearch(baseUrl, field, term, latestOnly, context);
-    } catch (e: any) {
-      vscode.window.showErrorMessage(`Catalog search error: ${String(e?.message || e)}`);
-      return;
-    }
-    if (!mods.length) { vscode.window.showInformationMessage('No results.'); return; }
-
-    const pick = await vscode.window.showQuickPick(
-      mods.map(m => ({ label: `${m.name}@${m.revision}`, description: m.organization ?? 'unknown org', m })),
-      { placeHolder: 'Select a module to import' }
-    );
-    if (!pick) return;
-
-    let content = '';
-    try {
-      content = await catalogDownload(baseUrl, pick.m.name, pick.m.revision);
-    } catch (e: any) {
-      vscode.window.showErrorMessage(`Download failed: ${String(e?.message || e)}`);
-      return;
-    }
-    const fileName = `${pick.m.name}@${pick.m.revision}.yang`;
-    const orgDir = pick.m.organization?.replace(/[^\w.-]+/g, '_') || 'catalog';
-    const dest = await materializeTo(path.join(importDir, 'catalog', orgDir), fileName, content);
-    const rel = path.relative(ws.uri.fsPath, dest);
-    const entry: ManifestEntry = {
-      name: pick.m.name,
-      revision: pick.m.revision,
-      organization: pick.m.organization,
-      source: { type: 'catalog', ref: baseUrl },
-      destRel: rel,
-      sha256: sha256Of(content),
-      importedAt: new Date().toISOString()
-    };
-    await upsertManifest(entry);
-    vscode.window.showInformationMessage(`Imported: ${path.basename(dest)}`, 'Reveal').then(btn => {
-      if (btn) vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(dest));
+  const postInit = async () => {
+    const { sources } = modelsConfig();
+    const locals = (sources as YangSource[]).filter(s => s.type === 'local') as LocalSource[];
+    const catalogs = (sources as YangSource[]).filter(s => s.type === 'catalog') as CatalogSource[];
+    const manifest = await getManifestSummary();
+    panel.webview.postMessage({
+      type: 'initData',
+      sources: { locals, catalogs },
+      destDir: destDirCurrent,
+      manifest
     });
-    return;
-  }
-
-  // local
-  const locals = (modelsConfig().sources as YangSource[]).filter(s => s.type === 'local') as LocalSource[];
-  if (!locals.length) {
-    vscode.window.showWarningMessage('No local sources configured. Add via Settings → yang.models.sources or run "YANG Models: Add Local Source".');
-    return;
-  }
-  const sourcePick = await vscode.window.showQuickPick(
-    locals.map(ls => ({ label: ls.name ?? path.basename(ls.path), description: ls.path, ls })),
-    { placeHolder: 'Select a local source to search' }
-  );
-  if (!sourcePick) return;
-
-  const term = await vscode.window.showInputBox({ prompt: `Local: search module name in ${sourcePick.description}` });
-  if (!term) return;
-
-  let mods: Array<CatalogModule & { filePath: string }> = [];
-  try { mods = await scanLocalSource(sourcePick.ls.path); } catch { /* ignore */ }
-  const filtered = mods.filter(m => m.name.toLowerCase().includes(term.toLowerCase()));
-  if (!filtered.length) { vscode.window.showInformationMessage('No results.'); return; }
-
-  const pick = await vscode.window.showQuickPick(
-    filtered.map(m => ({ label: `${m.name}@${m.revision}`, description: m.filePath, m })),
-    { placeHolder: 'Select a module to import' }
-  );
-  if (!pick) return;
-
-  const fileName = `${pick.m.name}@${pick.m.revision}.yang`;
-  const dest = await copyFileTo(path.join(importDir, 'local', (sourcePick.ls.name ?? 'local').replace(/[^\w.-]+/g, '_')), pick.m.filePath, fileName);
-  const rel = path.relative(ws.uri.fsPath, dest);
-  const content = await fs.promises.readFile(dest, 'utf8');
-  const entry: ManifestEntry = {
-    name: pick.m.name,
-    revision: pick.m.revision,
-    organization: pick.m.organization,
-    source: { type: 'local', ref: sourcePick.ls.path },
-    destRel: rel,
-    sha256: sha256Of(content),
-    importedAt: new Date().toISOString()
   };
-  await upsertManifest(entry);
-  vscode.window.showInformationMessage(`Imported: ${path.basename(dest)}`, 'Reveal').then(btn => {
-    if (btn) vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(dest));
+
+  panel.webview.onDidReceiveMessage(async (msg) => {
+    try {
+      const cfg = vscode.workspace.getConfiguration('yang.models');
+      const sources = (cfg.get('sources') as any[]) ?? [];
+      const ws = getWorkspaceFolder();
+      if (!ws) {
+        panel.webview.postMessage({ type: 'toast', message: 'Open a workspace first' });
+        return;
+      }
+
+      // 初始化 / 刷新 / 打开设置
+      if (msg.type === 'init') { await postInit(); return; }
+      if (msg.type === 'refreshSources') { await postInit(); return; }
+      if (msg.type === 'openSettings') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'yang.models.sources');
+        return;
+      }
+
+      // 资源源管理：新增/删除
+      if (msg.type === 'addLocalSource') {
+        const sel = await vscode.window.showOpenDialog({
+          canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
+          openLabel: 'Select local folder containing YANG modules'
+        });
+        if (!sel || !sel[0]) return;
+        const name = await vscode.window.showInputBox({
+          prompt: 'Optional display name for this source',
+          value: path.basename(sel[0].fsPath)
+        });
+        sources.push({ type: 'local', path: sel[0].fsPath, name: name || undefined });
+        await cfg.update('sources', sources, vscode.ConfigurationTarget.Workspace);
+        const locals = (sources as YangSource[]).filter(s => s.type === 'local') as LocalSource[];
+        const catalogs = (sources as YangSource[]).filter(s => s.type === 'catalog') as CatalogSource[];
+        panel.webview.postMessage({ type: 'sourcesUpdated', sources: { locals, catalogs } });
+        return;
+      }
+
+      if (msg.type === 'addCatalogSource') {
+        const baseUrl = String(msg.baseUrl || '').trim();
+        if (!baseUrl) return;
+        const name = msg.name ? String(msg.name).trim() : undefined;
+        sources.push({ type: 'catalog', baseUrl, name });
+        await cfg.update('sources', sources, vscode.ConfigurationTarget.Workspace);
+        const locals = (sources as YangSource[]).filter(s => s.type === 'local') as LocalSource[];
+        const catalogs = (sources as YangSource[]).filter(s => s.type === 'catalog') as CatalogSource[];
+        panel.webview.postMessage({ type: 'sourcesUpdated', sources: { locals, catalogs } });
+        return;
+      }
+
+      if (msg.type === 'deleteSource') {
+        const idx = Number(msg.index);
+        if (idx >= 0 && idx < sources.length) {
+          sources.splice(idx, 1);
+          await cfg.update('sources', sources, vscode.ConfigurationTarget.Workspace);
+          const locals = (sources as YangSource[]).filter(s => s.type === 'local') as LocalSource[];
+          const catalogs = (sources as YangSource[]).filter(s => s.type === 'catalog') as CatalogSource[];
+          panel.webview.postMessage({ type: 'sourcesUpdated', sources: { locals, catalogs } });
+        }
+        return;
+      }
+
+      // 目标目录：默认/选择
+      if (msg.type === 'setDestDefault') {
+        destDirCurrent = calcDefaultImportDirAbs();
+        panel.webview.postMessage({ type: 'destChanged', destDir: destDirCurrent });
+        return;
+      }
+      if (msg.type === 'chooseDest') {
+        const sel = await vscode.window.showOpenDialog({
+          canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
+          openLabel: 'Select destination folder'
+        });
+        if (!sel || !sel[0]) return;
+        destDirCurrent = sel[0].fsPath;
+        panel.webview.postMessage({ type: 'destChanged', destDir: destDirCurrent });
+        return;
+      }
+
+      // Manifest / 缓存
+      if (msg.type === 'openManifest') {
+        const f = manifestFsPath(); if (!f) return;
+        try { await fs.promises.stat(f); } catch { await writeManifest({ items: [] }); }
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(f));
+        await vscode.window.showTextDocument(doc, { preview: false });
+        return;
+      }
+      if (msg.type === 'clearCache') {
+        await context.globalState.update(MODELS_CACHE_KEY, {});
+        panel.webview.postMessage({ type: 'toast', message: 'Catalog cache cleared', level: 'ok' });
+        const manifest = await getManifestSummary();
+        panel.webview.postMessage({ type: 'manifestInfo', manifest });
+        return;
+      }
+
+      // 搜索
+      if (msg.type === 'searchLocal') {
+        const term = String(msg.term || '').trim();
+        const locals = (sources as YangSource[]).filter(s => s.type === 'local') as LocalSource[];
+        let mods: Array<CatalogModule & { filePath: string, sourceName?: string }> = [];
+        for (const s of locals) {
+          const list = await scanLocalSource(s.path);
+          list.forEach(x => (x as any).sourceName = s.name || path.basename(s.path));
+          mods = mods.concat(list);
+        }
+        const filtered = term ? mods.filter(m => m.name.toLowerCase().includes(term.toLowerCase())) : mods;
+        const rows = filtered.map(m => ({
+          kind: 'local', name: m.name, revision: m.revision, organization: m.organization,
+          where: m.filePath, from: (m as any).sourceName, filePath: m.filePath
+        }));
+        panel.webview.postMessage({ type: 'localResults', rows });
+        return;
+      }
+
+      if (msg.type === 'searchCatalog') {
+        const field = String(msg.field || 'name');
+        const term = String(msg.term || '').trim();
+        const catalogs = (sources as YangSource[]).filter(s => s.type === 'catalog') as CatalogSource[];
+        const baseUrl = (catalogs[0]?.baseUrl) || 'https://www.yangcatalog.org';
+        try {
+          const list = await catalogSearch(baseUrl, field, term, true, context);
+          const rows = list.map(m => ({ kind: 'catalog', name: m.name, revision: m.revision, organization: m.organization, where: baseUrl, baseUrl }));
+          panel.webview.postMessage({ type: 'catalogResults', rows });
+        } catch (e: any) {
+          panel.webview.postMessage({ type: 'toast', message: String(e?.message || e) });
+          panel.webview.postMessage({ type: 'catalogResults', rows: [] });
+        }
+        return;
+      }
+
+      // 导入：Local
+      if (msg.type === 'importLocal') {
+        const item = msg.item;
+        const sourceName = (item.from || 'local').replace(/[^\w.-]+/g, '_');
+        const saveDir = path.join(destDirCurrent, 'local', sourceName);
+        const fileName = `${item.name}@${item.revision}.yang`;
+        const dest = await copyFileTo(saveDir, item.filePath, fileName);
+        const rel = path.relative(ws.uri.fsPath, dest);
+        const content = await fs.promises.readFile(dest, 'utf8');
+        const entry: ManifestEntry = {
+          name: item.name, revision: item.revision, organization: item.organization,
+          source: { type: 'local', ref: item.filePath }, destRel: rel,
+          sha256: sha256Of(content), importedAt: new Date().toISOString()
+        };
+        await upsertManifest(entry);
+        panel.webview.postMessage({ type: 'imported', file: path.basename(dest) });
+        const manifest = await getManifestSummary(); panel.webview.postMessage({ type: 'manifestInfo', manifest });
+        return;
+      }
+
+      // 导入：Catalog
+      if (msg.type === 'importCatalog') {
+        const item = msg.item;
+        const baseUrl = String(item.baseUrl || 'https://www.yangcatalog.org');
+        const orgDir = (item.organization || 'catalog').replace(/[^\w.-]+/g, '_');
+        const saveDir = path.join(destDirCurrent, 'catalog', orgDir);
+        const fileName = `${item.name}@${item.revision}.yang`;
+        const content = await catalogDownload(baseUrl, item.name, item.revision);
+        const dest = await materializeTo(saveDir, fileName, content);
+        const rel = path.relative(ws.uri.fsPath, dest);
+        const entry: ManifestEntry = {
+          name: item.name, revision: item.revision, organization: item.organization,
+          source: { type: 'catalog', ref: baseUrl }, destRel: rel,
+          sha256: sha256Of(content), importedAt: new Date().toISOString()
+        };
+        await upsertManifest(entry);
+        panel.webview.postMessage({ type: 'imported', file: path.basename(dest) });
+        const manifest = await getManifestSummary(); panel.webview.postMessage({ type: 'manifestInfo', manifest });
+        return;
+      }
+
+    } catch (e: any) {
+      panel.webview.postMessage({ type: 'toast', message: `Error: ${String(e?.message || e)}` });
+    }
   });
-}
 
-async function cmdOpenManifest() {
-  const f = manifestFsPath();
-  if (!f) { vscode.window.showErrorMessage('No workspace open.'); return; }
-  try {
-    await fs.promises.stat(f);
-  } catch {
-    await writeManifest({ items: [] });
-  }
-  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(f));
-  await vscode.window.showTextDocument(doc, { preview: false });
+  await postInit();
 }
-
-async function cmdRefreshModels(provider: YangModelsTreeProvider) {
-  // 简单做法：清除缓存并刷新 Tree
-  await extCtx?.globalState.update(MODELS_CACHE_KEY, {});
-  provider.refresh();
-  vscode.window.showInformationMessage('YANG Models cache cleared. Sources refreshed.');
-}
-
-async function cmdAddLocalSource() {
-  const sel = await vscode.window.showOpenDialog({
-    canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
-    openLabel: 'Select local folder containing YANG modules'
-  });
-  if (!sel || !sel[0]) return;
-  const name = await vscode.window.showInputBox({ prompt: 'Optional display name for this source', value: path.basename(sel[0].fsPath) });
-  const cfg = vscode.workspace.getConfiguration('yang.models');
-  const sources = (cfg.get('sources') as any[]) ?? [];
-  sources.push({ type: 'local', path: sel[0].fsPath, name: name || undefined });
-  await cfg.update('sources', sources, vscode.ConfigurationTarget.Workspace);
-  vscode.window.showInformationMessage('Local source added to settings.');
-}
+/* ================================================================ */
 
 /* -------------------------------------------------
  * activate / deactivate
@@ -1384,7 +1414,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showWarningMessage('Failed to start YANG LSP. Please check the build artifacts and paths.');
   }
 
-  // commands (existing)
+  // commands
   context.subscriptions.push(
     vscode.commands.registerCommand('yang.toggleRuleSet', async () => {
       const cfg  = vscode.workspace.getConfiguration('yangeditor');
@@ -1401,19 +1431,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('oas.openOutputFolder', () => openOutputFolderCommand(context)),
     vscode.commands.registerCommand('oas.switchAnnotation', () => switchAnnotationCommand(context)),
     vscode.commands.registerCommand('oas.openWatcherLog', () => openWatcherLogCommand(context)),
-  );
 
-  // NEW: YANG Models Tree + Commands
-  const modelsProvider = new YangModelsTreeProvider(context);
-  const reg = vscode.window.registerTreeDataProvider('yangModelsView', modelsProvider);
-  const treeView = vscode.window.createTreeView('yangModelsView', { treeDataProvider: modelsProvider, showCollapseAll: true });
-  context.subscriptions.push(reg, treeView);
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('yangModels.searchImport', (kind?: 'catalog' | 'local') => cmdSearchImport(kind ?? 'catalog', context)),
-    vscode.commands.registerCommand('yangModels.openManifest', () => cmdOpenManifest()),
-    vscode.commands.registerCommand('yangModels.refresh', () => cmdRefreshModels(modelsProvider)),
-    vscode.commands.registerCommand('yangModels.addLocalSource', () => cmdAddLocalSource()),
+    /* NEW */
+    vscode.commands.registerCommand('Open_YANG_import_UI', () => openImportUI(context))
   );
 
   // status bar init + polling
