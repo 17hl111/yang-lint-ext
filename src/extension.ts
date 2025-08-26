@@ -1014,6 +1014,7 @@ function importWebviewHtml(): string {
       input[type=text],select{flex:1 1 auto;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg)}
       button{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg);cursor:pointer}
       button.primary{border-color:var(--accent)}
+      button[disabled]{opacity:.6;cursor:not-allowed}
       table{width:100%;border-collapse:collapse;font-family:ui-monospace,Consolas,monospace}
       th,td{border-bottom:1px solid var(--border);padding:6px 8px;text-align:left;vertical-align:top}
       .muted{color:var(--muted)}
@@ -1025,6 +1026,9 @@ function importWebviewHtml(): string {
       .ok{color:#2ea043}
       .section{margin-top:10px}
       .kbd{padding:1px 4px;border:1px solid var(--border);border-radius:4px;font-family:ui-monospace,Consolas,monospace}
+      /* spinner for catalog search */
+      .spin{display:none;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:sp 1s linear infinite;margin-left:6px;vertical-align:middle}
+      @keyframes sp{to{transform:rotate(360deg)}}
     </style>
   </head>
   <body>
@@ -1088,6 +1092,7 @@ function importWebviewHtml(): string {
               </select>
               <input id="catTerm" type="text" placeholder="Search term"/>
               <button id="btnSearchCatalog" class="primary">Search Catalog</button>
+              <span id="catSpin" class="spin" aria-label="Searching" title="Searching"></span>
             </div>
           </div>
         </div>
@@ -1095,10 +1100,19 @@ function importWebviewHtml(): string {
 
       <div class="card section">
         <h2>Results</h2>
+        <div class="row">
+          <button id="btnImportSelected" disabled>Import selected</button>
+          <span id="selCount" class="muted small"></span>
+        </div>
         <div class="row small muted" id="resultsHint">No results yet.</div>
         <div style="overflow:auto">
           <table id="resultsTable" style="display:none">
-            <thead><tr><th>Name</th><th>Revision</th><th>Org/From</th><th>Where</th><th></th></tr></thead>
+            <thead>
+              <tr>
+                <th><input id="selAll" type="checkbox"/></th>
+                <th>Name</th><th>Revision</th><th>Org/From</th><th>Where</th><th>Action</th>
+              </tr>
+            </thead>
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
@@ -1114,6 +1128,9 @@ function importWebviewHtml(): string {
       const vscode = acquireVsCodeApi();
       const $ = (id)=>document.getElementById(id);
       const toast=(s,cls='')=>{ const t=$('toast'); t.textContent=s; t.className = cls; setTimeout(()=>{ if($('toast').textContent===s) $('toast').textContent=''; }, 4000); };
+
+      let lastRows = [];
+      let selected = new Set();
 
       function renderSources(data){
         const {locals,catalogs} = data;
@@ -1136,18 +1153,67 @@ function importWebviewHtml(): string {
       }
       function renderDest(s){ $('dest').textContent = s; }
       function renderManifest(m){ $('mCount').textContent = m.count; $('mTime').textContent = m.lastUpdated || '-'; }
+
       function renderResults(rows){
+        lastRows = Array.isArray(rows) ? rows : [];
+        selected = new Set();
+
         const tb=$('resultsBody'); tb.innerHTML='';
         const table=$('resultsTable'), hint=$('resultsHint');
-        if(!rows.length){ table.style.display='none'; hint.style.display='block'; hint.textContent='No results.'; return; }
+        const selAll=$('selAll'), selCount=$('selCount'), btnBatch=$('btnImportSelected');
+
+        const updateUI=()=>{
+          const n = selected.size;
+          btnBatch.disabled = n===0;
+          selCount.textContent = n ? (n + ' selected') : '';
+          if(selAll){
+            selAll.indeterminate = n>0 && n<lastRows.length;
+            selAll.checked = n>0 && n===lastRows.length;
+          }
+        };
+        updateUI();
+
+        if(!lastRows.length){ table.style.display='none'; hint.style.display='block'; hint.textContent='No results.'; return; }
         table.style.display='table'; hint.style.display='none';
-        rows.forEach((r,idx)=>{
+
+        lastRows.forEach((r,idx)=>{
           const tr=document.createElement('tr');
-          tr.innerHTML='<td>'+r.name+'</td><td>'+r.revision+'</td><td>'+(r.organization||r.from||'')+'</td><td class="small muted">'+(r.where||'')+'</td>';
+          tr.innerHTML=
+            '<td><input type="checkbox" class="rowSel" data-i="'+idx+'"/></td>'+
+            '<td>'+r.name+'</td>'+
+            '<td>'+r.revision+'</td>'+
+            '<td>'+(r.organization||r.from||'')+'</td>'+
+            '<td class="small muted">'+(r.where||'')+'</td>';
           const td=document.createElement('td'); const btn=document.createElement('button'); btn.textContent='Import';
           btn.onclick=()=>{ if(r.kind==='local'){ vscode.postMessage({type:'importLocal', item:r}); } else { vscode.postMessage({type:'importCatalog', item:r}); } };
           td.appendChild(btn); tr.appendChild(td); tb.appendChild(tr);
         });
+
+        tb.addEventListener('change', (e)=>{
+          const t=e.target;
+          if(!(t && t.classList && t.classList.contains('rowSel'))) return;
+          const i = Number(t.getAttribute('data-i'));
+          if (t.checked) selected.add(i); else selected.delete(i);
+          updateUI();
+        });
+
+        if(selAll){
+          selAll.onchange = ()=>{
+            if(selAll.checked){ selected = new Set(lastRows.map((_,i)=>i)); }
+            else { selected = new Set(); }
+            // 重新渲染以同步每行复选框状态
+            renderResults(lastRows);
+          };
+        }
+
+        btnBatch.onclick = ()=>{
+          const items = Array.from(selected).map(i=> lastRows[i]);
+          const locals = items.filter(r=>r.kind==='local');
+          const catalogs = items.filter(r=>r.kind==='catalog');
+          btnBatch.disabled = true;
+          if(catalogs.length) vscode.postMessage({type:'importCatalogBatch', items: catalogs});
+          if(locals.length) vscode.postMessage({type:'importLocalBatch', items: locals});
+        };
       }
 
       // Events
@@ -1164,7 +1230,11 @@ function importWebviewHtml(): string {
       $('btnClearCache').onclick=()=>vscode.postMessage({type:'clearCache'});
 
       $('btnSearchLocal').onclick=()=>{ const term=$('localTerm').value.trim(); vscode.postMessage({type:'searchLocal', term}); };
-      $('btnSearchCatalog').onclick=()=>{ const term=$('catTerm').value.trim(); const field=$('catField').value; vscode.postMessage({type:'searchCatalog', field, term}); };
+      $('btnSearchCatalog').onclick=()=>{ 
+        const term=$('catTerm').value.trim(); const field=$('catField').value;
+        $('btnSearchCatalog').disabled = true; const sp=$('catSpin'); if(sp) sp.style.display='inline-block';
+        vscode.postMessage({type:'searchCatalog', field, term}); 
+      };
 
       // Init
       vscode.postMessage({type:'init'});
@@ -1177,8 +1247,12 @@ function importWebviewHtml(): string {
         else if(m.type==='destChanged'){ renderDest(m.destDir); toast('Destination changed','ok'); }
         else if(m.type==='manifestInfo'){ renderManifest(m.manifest); }
         else if(m.type==='toast'){ toast(m.message, m.level||''); }
-        else if(m.type==='localResults'){ renderResults(m.rows); }
-        else if(m.type==='catalogResults'){ renderResults(m.rows); }
+        else if(m.type==='localResults'){ renderResults(m.rows); $('btnImportSelected').disabled = true; }
+        else if(m.type==='catalogResults'){ 
+          const sp=$('catSpin'); if(sp) sp.style.display='none'; 
+          $('btnSearchCatalog').disabled = false;
+          renderResults(m.rows); $('btnImportSelected').disabled = true; 
+        }
         else if(m.type==='imported'){ toast('Imported: '+m.file,'ok'); }
       });
     </script>
@@ -1338,7 +1412,7 @@ async function openImportUI(context: vscode.ExtensionContext) {
         return;
       }
 
-      // 导入：Local
+      // 导入：Local（单条）
       if (msg.type === 'importLocal') {
         const item = msg.item;
         const sourceName = (item.from || 'local').replace(/[^\w.-]+/g, '_');
@@ -1358,7 +1432,7 @@ async function openImportUI(context: vscode.ExtensionContext) {
         return;
       }
 
-      // 导入：Catalog
+      // 导入：Catalog（单条）
       if (msg.type === 'importCatalog') {
         const item = msg.item;
         const baseUrl = String(item.baseUrl || 'https://www.yangcatalog.org');
@@ -1376,6 +1450,61 @@ async function openImportUI(context: vscode.ExtensionContext) {
         await upsertManifest(entry);
         panel.webview.postMessage({ type: 'imported', file: path.basename(dest) });
         const manifest = await getManifestSummary(); panel.webview.postMessage({ type: 'manifestInfo', manifest });
+        return;
+      }
+
+      // ====== 新增：批量导入（Catalog）======
+      if (msg.type === 'importCatalogBatch') {
+        const items = Array.isArray(msg.items) ? msg.items : [];
+        for (const item of items) {
+          try {
+            const baseUrl = String(item.baseUrl || 'https://www.yangcatalog.org');
+            const orgDir = (item.organization || 'catalog').replace(/[^\w.-]+/g, '_');
+            const saveDir = path.join(destDirCurrent, 'catalog', orgDir);
+            const fileName = `${item.name}@${item.revision}.yang`;
+            const content = await catalogDownload(baseUrl, item.name, item.revision);
+            const dest = await materializeTo(saveDir, fileName, content);
+            const rel = path.relative(ws.uri.fsPath, dest);
+            const entry: ManifestEntry = {
+              name: item.name, revision: item.revision, organization: item.organization,
+              source: { type: 'catalog', ref: baseUrl }, destRel: rel,
+              sha256: sha256Of(content), importedAt: new Date().toISOString()
+            };
+            await upsertManifest(entry);
+            panel.webview.postMessage({ type: 'imported', file: path.basename(dest) });
+          } catch (e: any) {
+            panel.webview.postMessage({ type: 'toast', message: `Catalog import failed for ${item?.name}@${item?.revision}: ${String(e?.message || e)}` });
+          }
+        }
+        const manifest = await getManifestSummary(); panel.webview.postMessage({ type: 'manifestInfo', manifest });
+        panel.webview.postMessage({ type: 'toast', message: `Imported ${items.length} catalog item(s)`, level: 'ok' });
+        return;
+      }
+
+      // ====== 新增：批量导入（Local）======
+      if (msg.type === 'importLocalBatch') {
+        const items = Array.isArray(msg.items) ? msg.items : [];
+        for (const item of items) {
+          try {
+            const sourceName = (item.from || 'local').replace(/[^\w.-]+/g, '_');
+            const saveDir = path.join(destDirCurrent, 'local', sourceName);
+            const fileName = `${item.name}@${item.revision}.yang`;
+            const dest = await copyFileTo(saveDir, item.filePath, fileName);
+            const rel = path.relative(ws.uri.fsPath, dest);
+            const content = await fs.promises.readFile(dest, 'utf8');
+            const entry: ManifestEntry = {
+              name: item.name, revision: item.revision, organization: item.organization,
+              source: { type: 'local', ref: item.filePath }, destRel: rel,
+              sha256: sha256Of(content), importedAt: new Date().toISOString()
+            };
+            await upsertManifest(entry);
+            panel.webview.postMessage({ type: 'imported', file: path.basename(dest) });
+          } catch (e: any) {
+            panel.webview.postMessage({ type: 'toast', message: `Local import failed for ${item?.name}@${item?.revision}: ${String(e?.message || e)}` });
+          }
+        }
+        const manifest = await getManifestSummary(); panel.webview.postMessage({ type: 'manifestInfo', manifest });
+        panel.webview.postMessage({ type: 'toast', message: `Imported ${items.length} local item(s)`, level: 'ok' });
         return;
       }
 
