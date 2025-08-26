@@ -169,7 +169,8 @@
     "@types/node": "^20.11.17",
     "@types/vscode": "^1.87.0",
     "@vscode/test-electron": "^2.4.3",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "@types/node-fetch": "^2.6.11"
   },
   "dependencies": {
     "ajv": "^8.12.0",
@@ -177,7 +178,8 @@
     "js-yaml": "^4.1.0",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.0",
-    "vscode-languageserver-textdocument": "^1.0.1"
+    "vscode-languageserver-textdocument": "^1.0.1",
+    "node-fetch": "^2.6.11"
   },
   "files": [
     "out/**",
